@@ -264,7 +264,7 @@ class DatasetBuilder:
 
     def save(self, datasets: Dict[str, Dataset], output_dir: Union[str, Path]) -> None:
         """
-        Save multiple task-specific datasets to disk.
+        Save multiple task-specific datasets to disk in JSONL format.
 
         Args:
             datasets: Dictionary mapping task names to Dataset objects
@@ -302,14 +302,12 @@ class DatasetBuilder:
                 if split_data is None:
                     continue
 
-                split_path = task_dir / f"{split_name}.json"
+                # Create JSONL file (each line is a valid JSON object)
+                split_path = task_dir / f"{split_name}.jsonl"
 
                 with open(split_path, "w") as f:
-                    json.dump(
-                        {"items": [item.dict() for item in split_data.items]},
-                        f,
-                        indent=2,
-                    )
+                    for item in split_data.items:
+                        f.write(json.dumps(item.dict()) + "\n")
 
             # Save label mapping
             mapping_path = task_dir / "label_mapping.json"
