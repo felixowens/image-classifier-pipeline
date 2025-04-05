@@ -3,7 +3,8 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Union, Optional
 
 from sklearn.model_selection import train_test_split
-
+from PIL import Image
+from image_classifier_pipeline.feature_extractor.dino import DinoFeatureExtractor
 from image_classifier_pipeline.lib import (
     setup_logger,
     ImageItem,
@@ -23,6 +24,7 @@ class DatasetBuilder:
     def __init__(self, config: DatasetConfig):
         self.config = config
         self.label_mappings = self._create_label_mappings()
+        self.feature_extractor = DinoFeatureExtractor()
 
     def _create_label_mappings(self) -> Dict[str, Dict[str, int]]:
         """Create label mappings for each task based on the configuration."""
@@ -82,13 +84,21 @@ class DatasetBuilder:
                         f"No images found for task {task.name} in {image_dir}"
                     )
 
+                # TODO: add progress bar
                 for image_path in image_files:
+                    image = Image.open(image_path)
+                    features = self.feature_extractor.extract_features(image)
+                    logger.info(f"Extracted features: {features.shape}")
+
+                    features_list: List[float] = features.flatten().tolist()
+
                     items.append(
                         ImageItem(
                             image_path=str(image_path),
                             label=label,
                             task_name=task.name,
                             label_id=self.label_mappings[task.name][label],
+                            features=features_list,
                         )
                     )
 

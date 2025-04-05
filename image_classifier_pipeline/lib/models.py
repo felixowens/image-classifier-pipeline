@@ -16,6 +16,7 @@ class ImageItem(BaseModel):
     task_name: str
     label: str
     label_id: int
+    features: List[float]
 
 
 class ImageFormat(str, Enum):
