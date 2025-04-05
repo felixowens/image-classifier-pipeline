@@ -59,6 +59,45 @@ class Task(BaseModel):
         return v
 
 
+class DatasetSplit(BaseModel):
+    """
+    Configuration for a single dataset split.
+
+    Validate that split_mapping is a valid mapping from task names to split ratios.
+        The sum of the values must be 1.
+        The keys must be "train", "validation", and "test".
+        Train and validation must be non-zero.
+    """
+
+    train: float = Field(..., description="Ratio of training data")
+    validation: float = Field(..., description="Ratio of validation data")
+    test: float = Field(..., description="Ratio of test data")
+
+    # @field_validator("train", "validation", "test")
+    # @classmethod
+    # def validate_split(cls, v: float, info: ValidationInfo) -> float:
+    #     """Validate that the split is between 0 and 1."""
+    #     if v < 0 or v > 1:
+    #         raise ValueError("split must be between 0 and 1")
+    #     return v
+
+    # @field_validator("train", "validation", "test")
+    # @classmethod
+    # def validate_split_sum(cls, v: float, info: ValidationInfo) -> float:
+    #     """Validate that the sum of the splits is 1."""
+    #     if sum(info.data.values()) != 1:
+    #         raise ValueError("split_mapping must sum to 1")
+    #     return v
+
+    # @field_validator("train", "test")
+    # @classmethod
+    # def validate_split_non_zero(cls, v: float, info: ValidationInfo) -> float:
+    #     """Validate that the train and test splits are non-zero."""
+    #     if v <= 0:
+    #         raise ValueError("train and test splits must be non-zero")
+    #     return v
+
+
 class MetadataConfig(BaseModel):
     """Configuration for metadata-based label extraction."""
 
@@ -123,6 +162,11 @@ class DatasetConfig(BaseModel):
     )
     stratify_by: Optional[str] = Field(
         None, description="Task name to stratify by when splitting the dataset"
+    )
+
+    split_mapping: DatasetSplit = Field(
+        default=DatasetSplit(train=0.8, validation=0, test=0.2),
+        description="Mapping of dataset splits.",
     )
 
     @field_validator("metadata")

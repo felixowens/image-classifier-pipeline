@@ -18,9 +18,6 @@ def build(
         ..., help="Path to the configuration file (YAML/JSON)"
     ),
     output_dir: str = typer.Argument(..., help="Path to save the output datasets"),
-    train_ratio: float = typer.Option(0.7, help="Ratio of training data"),
-    validation_ratio: float = typer.Option(0.15, help="Ratio of validation data"),
-    test_ratio: float = typer.Option(0.15, help="Ratio of test data"),
     random_state: int = typer.Option(42, help="Random seed for reproducibility"),
 ):
     """
@@ -44,6 +41,7 @@ def build(
         # Parse and validate the configuration
         try:
             config = DatasetConfig.model_validate(config_data)
+            typer.echo(f"Configuration: {config}")
         except ValidationError as e:
             typer.echo(f"Configuration validation error: {e}")
             raise typer.Exit(code=1)
@@ -53,9 +51,6 @@ def build(
         try:
             datasets = builder.build(
                 image_root=image_dir,
-                train_ratio=train_ratio,
-                validation_ratio=validation_ratio,
-                test_ratio=test_ratio,
                 random_state=random_state,
             )
         except Exception as e:
@@ -69,7 +64,10 @@ def build(
         for task_name, dataset in datasets.items():
             typer.echo(f"\nTask: {task_name}")
             typer.echo(f"  - Train set: {len(dataset.train.items)} images")
-            typer.echo(f"  - Validation set: {len(dataset.validation.items)} images")
+            if dataset.validation:
+                typer.echo(
+                    f"  - Validation set: {len(dataset.validation.items)} images"
+                )
             typer.echo(f"  - Test set: {len(dataset.test.items)} images")
 
     except Exception as e:

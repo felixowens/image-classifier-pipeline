@@ -41,8 +41,8 @@ class Dataset(BaseModel):
 
     task_name: str
     train: DatasetSplit
-    validation: DatasetSplit
     test: DatasetSplit
+    validation: Optional[DatasetSplit]
 
     # Store label mapping for this task
     # For categorical tasks: {class_name: index}
@@ -129,9 +129,6 @@ class DatasetBuilder:
     def build(
         self,
         image_root: Union[str, Path],
-        train_ratio: float = 0.7,
-        validation_ratio: float = 0.15,
-        test_ratio: float = 0.15,
         random_state: int = 42,
     ) -> Dict[str, Dataset]:
         """
@@ -139,20 +136,12 @@ class DatasetBuilder:
 
         Args:
             image_root: Path to the root directory containing images
-            train_ratio: Ratio of training data
-            validation_ratio: Ratio of validation data
-            test_ratio: Ratio of test data
             random_state: Random seed for reproducibility
 
         Returns:
             A dictionary mapping task names to Dataset objects
         """
         logger.info("Starting to build datasets.")
-
-        # Validate split ratios
-        if abs(train_ratio + validation_ratio + test_ratio - 1.0) > 1e-10:
-            logger.error("Split ratios must sum to 1.0")
-            raise ValueError("Split ratios must sum to 1.0")
 
         image_root = Path(image_root)
 
@@ -178,27 +167,42 @@ class DatasetBuilder:
             if not task_items:
                 continue  # Skip tasks with no valid items
 
-            # Split the dataset for this task
-            train_items, test_items = self._split_dataset(
+            # Calculate the actual split sizes
+            split_config = self.config.split_mapping
+
+            # First, split off the test set
+            train_val_items, test_items = self._split_dataset(
                 task_items,
-                test_size=test_ratio / (train_ratio + validation_ratio + test_ratio),
+                test_size=split_config.test,
                 random_state=random_state,
                 stratify_by=task_name if self.config.stratify_by == task_name else None,
             )
 
-            # Further split train into train and validation
-            train_items, val_items = self._split_dataset(
-                train_items,
-                test_size=validation_ratio / (train_ratio + validation_ratio),
-                random_state=random_state,
-                stratify_by=task_name if self.config.stratify_by == task_name else None,
-            )
+            # Then, if validation is needed, split the remaining data into train and validation
+            if split_config.validation > 0:
+                # Calculate the validation ratio relative to the train+validation portion
+                # validation_ratio = validation / (train + validation)
+                validation_ratio = split_config.validation / (
+                    split_config.train + split_config.validation
+                )
+
+                train_items, val_items = self._split_dataset(
+                    train_val_items,
+                    test_size=validation_ratio,
+                    random_state=random_state,
+                    stratify_by=(
+                        task_name if self.config.stratify_by == task_name else None
+                    ),
+                )
+            else:
+                train_items = train_val_items
+                val_items = None
 
             # Create dataset object for this task
             datasets[task_name] = Dataset(
                 task_name=task_name,
                 train=DatasetSplit(items=train_items),
-                validation=DatasetSplit(items=val_items),
+                validation=DatasetSplit(items=val_items) if val_items else None,
                 test=DatasetSplit(items=test_items),
                 label_mapping=self.label_mappings[task_name],
             )
@@ -269,7 +273,9 @@ class DatasetBuilder:
         tasks_summary = {
             task_name: {
                 "train_size": len(dataset.train.items),
-                "validation_size": len(dataset.validation.items),
+                "validation_size": (
+                    len(dataset.validation.items) if dataset.validation else 0
+                ),
                 "test_size": len(dataset.test.items),
                 "classes": list(dataset.label_mapping.keys()),
             }
@@ -287,6 +293,11 @@ class DatasetBuilder:
             # Save each split
             for split_name in ["train", "validation", "test"]:
                 split_data = getattr(dataset, split_name)
+
+                # Skip if the split doesn't exist (e.g., validation might be None)
+                if split_data is None:
+                    continue
+
                 split_path = task_dir / f"{split_name}.json"
 
                 with open(split_path, "w") as f:
