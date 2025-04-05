@@ -19,6 +19,7 @@ class ImageItem(BaseModel):
     image_path: str
     task_name: str
     label: str
+    label_id: int
 
 
 class ImageFormat(str, Enum):
@@ -118,7 +119,10 @@ class DatasetBuilder:
                 for image_path in image_files:
                     items.append(
                         ImageItem(
-                            image_path=str(image_path), label=label, task_name=task.name
+                            image_path=str(image_path),
+                            label=label,
+                            task_name=task.name,
+                            label_id=self.label_mappings[task.name][label],
                         )
                     )
 
