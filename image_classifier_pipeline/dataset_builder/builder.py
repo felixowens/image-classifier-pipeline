@@ -12,6 +12,7 @@ from image_classifier_pipeline.lib import (
     DatasetSplit,
     Dataset,
 )
+from tqdm import tqdm
 
 from .config import DatasetConfig, DirectoryConfig, LabelSourceType, TaskType
 
@@ -84,11 +85,13 @@ class DatasetBuilder:
                         f"No images found for task {task.name} in {image_dir}"
                     )
 
-                # TODO: add progress bar
-                for image_path in image_files:
+                # Add progress bar for image processing
+                for image_path in tqdm(
+                    image_files, desc=f"Processing images for {task.name}"
+                ):
                     image = Image.open(image_path)
                     features = self.feature_extractor.extract_features(image)
-                    logger.info(f"Extracted features: {features.shape}")
+                    logger.debug(f"Extracted features: {features.shape}")
 
                     features_list: List[float] = features.flatten().tolist()
 
