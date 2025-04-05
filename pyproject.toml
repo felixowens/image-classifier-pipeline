@@ -30,7 +30,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
 build-dataset = "image_classifier_pipeline.dataset_builder.cli:app"
-
+extract-features = "image_classifier_pipeline.feature_extractor.cli:app"
 [tool.pyright]
 include = ["image_classifier_pipeline"]
 typeCheckingMode = "strict"

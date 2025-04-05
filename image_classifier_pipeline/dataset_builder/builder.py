@@ -1,54 +1,20 @@
-from enum import Enum
 import json
 from pathlib import Path
 from typing import Dict, List, Tuple, Union, Optional
 
-from pydantic import BaseModel
 from sklearn.model_selection import train_test_split
 
-from image_classifier_pipeline.lib import setup_logger
+from image_classifier_pipeline.lib import (
+    setup_logger,
+    ImageItem,
+    ImageFormat,
+    DatasetSplit,
+    Dataset,
+)
 
 from .config import DatasetConfig, DirectoryConfig, LabelSourceType, TaskType
 
 logger = setup_logger(__name__)
-
-
-class ImageItem(BaseModel):
-    """Represents a single image with its label."""
-
-    image_path: str
-    task_name: str
-    label: str
-    label_id: int
-
-
-class ImageFormat(str, Enum):
-    PNG = "*.png"
-    JPG = "*.jpg"
-    JPEG = "*.jpeg"
-    GIF = "*.gif"
-    BMP = "*.bmp"
-    WEBP = "*.webp"
-
-
-class DatasetSplit(BaseModel):
-    """Represents a dataset split (train, validation, or test)."""
-
-    items: List[ImageItem]
-
-
-class Dataset(BaseModel):
-    """Represents a dataset for a single task with splits."""
-
-    task_name: str
-    train: DatasetSplit
-    test: DatasetSplit
-    validation: Optional[DatasetSplit]
-
-    # Store label mapping for this task
-    # For categorical tasks: {class_name: index}
-    # For ordinal tasks: {class_name: value}
-    label_mapping: Dict[str, int]
 
 
 class DatasetBuilder:
