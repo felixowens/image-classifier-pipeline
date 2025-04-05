@@ -1,0 +1,46 @@
+[project]
+name = "image-classifier-pipeline"
+version = "0.1.0"
+description = "A pipeline for training classifier heads on images."
+authors = [{ name = "Felix", email = "flxowens@pm.me" }]
+readme = "README.md"
+requires-python = ">=3.12"
+
+[tool.poetry]
+packages = [{ include = "image_classifier_pipeline" }]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+pydantic = "^2.11.2"
+pandas = "^2.2.3"
+pillow = "^11.1.0"
+scikit-learn = "^1.6.1"
+typer = "^0.15.2"
+pyyaml = "^6.0.2"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.5"
+black = "^25.1.0"
+isort = "^6.0.1"
+pyright = "^1.1.398"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+build-dataset = "image_classifier_pipeline.dataset_builder.cli:app"
+
+[tool.pyright]
+include = ["image_classifier_pipeline"]
+typeCheckingMode = "strict"
+reportMissingTypeStubs = false
+reportUnknownParameterType = false
+reportUnknownVariableType = false
+reportUnknownMemberType = false
+
+[tool.black]
+line-length = 88
+
+[tool.isort]
+profile = "black"
