@@ -24,7 +24,7 @@ def build(
     random_state: int = typer.Option(42, help="Random seed for reproducibility"),
 ):
     """
-    Build a dataset by associating images with labels and splitting into train/val/test sets.
+    Build task-specific datasets by associating images with labels and splitting into train/val/test sets.
     """
     try:
         # Load and validate configuration
@@ -48,10 +48,10 @@ def build(
             typer.echo(f"Configuration validation error: {e}")
             raise typer.Exit(code=1)
 
-        # Build the dataset
+        # Build the datasets
         builder = DatasetBuilder(config)
         try:
-            dataset = builder.build(
+            datasets = builder.build(
                 image_root=image_dir,
                 train_ratio=train_ratio,
                 validation_ratio=validation_ratio,
@@ -59,16 +59,18 @@ def build(
                 random_state=random_state,
             )
         except Exception as e:
-            typer.echo(f"Error building dataset: {e}")
+            typer.echo(f"Error building datasets: {e}")
             raise typer.Exit(code=1)
 
-        # Save the dataset
-        builder.save(dataset, output_dir)
+        # Save the datasets
+        builder.save(datasets, output_dir)
 
-        typer.echo(f"Dataset successfully built and saved to {output_dir}")
-        typer.echo(f"  - Train set: {len(dataset.train.items)} images")
-        typer.echo(f"  - Validation set: {len(dataset.validation.items)} images")
-        typer.echo(f"  - Test set: {len(dataset.test.items)} images")
+        typer.echo(f"Datasets successfully built and saved to {output_dir}")
+        for task_name, dataset in datasets.items():
+            typer.echo(f"\nTask: {task_name}")
+            typer.echo(f"  - Train set: {len(dataset.train.items)} images")
+            typer.echo(f"  - Validation set: {len(dataset.validation.items)} images")
+            typer.echo(f"  - Test set: {len(dataset.test.items)} images")
 
     except Exception as e:
         typer.echo(f"Error: {e}")

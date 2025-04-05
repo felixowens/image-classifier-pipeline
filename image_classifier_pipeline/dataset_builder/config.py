@@ -1,4 +1,6 @@
 from enum import Enum
+from pathlib import Path
+import re
 from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
@@ -74,11 +76,36 @@ class DirectoryConfig(BaseModel):
     """Configuration for directory structure-based label extraction."""
 
     pattern: str = Field(
-        ..., description="Pattern for extracting labels from directory structure"
+        ...,
+        description="Pattern for extracting labels from directory structure. This must include {task_name} and {label} placeholders.",
+        examples=["{task_name}/{label}"],
     )
-    task_positions: Dict[str, int] = Field(
-        ..., description="Mapping from task names to positions in directory path"
-    )
+
+    @field_validator("pattern")
+    @classmethod
+    def validate_pattern(cls, v: str, info: ValidationInfo) -> str:
+        """Validate that pattern contains valid placeholders."""
+        if not re.match(r"\{.*\}", v):
+            raise ValueError("pattern must contain valid placeholders")
+        if "{task_name}" not in v:
+            raise ValueError("pattern must contain {task_name} placeholder")
+        if "{label}" not in v:
+            raise ValueError("pattern must contain {label} placeholder")
+        if v.count("{task_name}") > 1:
+            raise ValueError("pattern must contain only one {task_name} placeholder")
+        if v.count("{label}") > 1:
+            raise ValueError("pattern must contain only one {label} placeholder")
+        return v
+
+    def image_dirs(
+        self, root: Path, task_name: str, labels: List[str]
+    ) -> Dict[str, Path]:
+        """Path to the directory containing the images for each label for a given task."""
+
+        return {
+            label: root / self.pattern.format(task_name=task_name, label=label)
+            for label in labels
+        }
 
 
 class DatasetConfig(BaseModel):

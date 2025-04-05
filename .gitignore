@@ -51,3 +51,4 @@ dmypy.json
 
 # Application files
 /config
+/tmp

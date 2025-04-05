@@ -1,23 +1,33 @@
+from enum import Enum
 import json
-import os
 from pathlib import Path
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Tuple, Union, Optional
 
 from pydantic import BaseModel
 from sklearn.model_selection import train_test_split
 
-from image_classifier_pipeline.lib.guards import assert_list
-from image_classifier_pipeline.lib.pandas import pandas
+from image_classifier_pipeline.lib import setup_logger
 
+from .config import DatasetConfig, DirectoryConfig, LabelSourceType, TaskType
 
-from .config import DatasetConfig, LabelSourceType, TaskType
+logger = setup_logger(__name__)
 
 
 class ImageItem(BaseModel):
-    """Represents a single image with its labels."""
+    """Represents a single image with its label."""
 
     image_path: str
-    labels: Dict[str, str]
+    task_name: str
+    label: str
+
+
+class ImageFormat(str, Enum):
+    PNG = "*.png"
+    JPG = "*.jpg"
+    JPEG = "*.jpeg"
+    GIF = "*.gif"
+    BMP = "*.bmp"
+    WEBP = "*.webp"
 
 
 class DatasetSplit(BaseModel):
@@ -27,16 +37,17 @@ class DatasetSplit(BaseModel):
 
 
 class Dataset(BaseModel):
-    """Represents the full dataset with splits."""
+    """Represents a dataset for a single task with splits."""
 
+    task_name: str
     train: DatasetSplit
     validation: DatasetSplit
     test: DatasetSplit
 
-    # Store label mappings for each task
-    # For categorical tasks: {task_name: {class_name: index}}
-    # For ordinal tasks: {task_name: {class_name: value}}
-    label_mappings: Dict[str, Dict[str, int]]
+    # Store label mapping for this task
+    # For categorical tasks: {class_name: index}
+    # For ordinal tasks: {class_name: value}
+    label_mapping: Dict[str, int]
 
 
 class DatasetBuilder:
@@ -64,90 +75,54 @@ class DatasetBuilder:
 
     def _load_from_metadata(self, image_root: Path) -> List[ImageItem]:
         """Load images and labels from a metadata file."""
-        if not self.config.metadata:
-            raise ValueError("Metadata configuration is missing")
 
-        metadata_path = Path(self.config.metadata.path)
+        raise NotImplementedError("Metadata loading not implemented")
 
-        # Load metadata file
-        if self.config.metadata.format == "csv":
-            df = pandas.read_csv(metadata_path)
-        elif self.config.metadata.format == "json":
-            df = pandas.read_json(metadata_path)
-        else:
-            raise ValueError(
-                f"Unsupported metadata format: {self.config.metadata.format}"
-            )
+    def _load_from_directory(
+        self, directory: DirectoryConfig, image_root: Path
+    ) -> List[ImageItem]:
+        """Load images and labels from directory structure."""
 
         items: List[ImageItem] = []
-        for _, row in df.iterrows():
-            image_file = row[self.config.metadata.image_col]
-            # Assert that image_file is a string
-            assert isinstance(image_file, str)
 
-            image_path = image_root / image_file
-            # Assert that image_path is a valid path
-            assert isinstance(image_path, Path)
-            assert image_path.exists()
-            assert image_path.is_file()
-            assert image_path.suffix.lower() in [".png", ".jpg", ".jpeg"]
+        for task in self.config.tasks:
+            logger.info(
+                f"Loading images from {directory.image_dirs(image_root, task.name, task.classes)}"
+            )
+            image_dirs = directory.image_dirs(image_root, task.name, task.classes)
+            if len(image_dirs) == 0:
+                raise ValueError(
+                    f"No images found for task {task.name} in {image_root}"
+                )
 
-            # Extract labels for each task
-            labels: Dict[str, str] = {}
-            for task in self.config.tasks:
-                col_name = self.config.metadata.label_cols.get(task.name)
-                if not col_name:
+            for label, image_dir in image_dirs.items():
+                if not image_dir.exists():
                     raise ValueError(
-                        f"Column name for task '{task.name}' not found in metadata configuration"
+                        f"Directory {image_dir} does not exist for task {task.name}"
+                    )
+                if not image_dir.is_dir():
+                    raise ValueError(
+                        f"Directory {image_dir} is not a directory for task {task.name}"
                     )
 
-                label = row[col_name]
-                # Assert that label is a string
-                assert isinstance(label, str)
+                image_files: List[Path] = []
+                for format in ImageFormat:
+                    image_files.extend(
+                        image_dir.glob(format.value, case_sensitive=False)
+                    )
+                if len(image_files) == 0:
+                    raise ValueError(
+                        f"No images found for task {task.name} in {image_dir}"
+                    )
 
-                # Assert that label is in the task classes
-                assert label in task.classes
+                for image_path in image_files:
+                    items.append(
+                        ImageItem(
+                            image_path=str(image_path), label=label, task_name=task.name
+                        )
+                    )
 
-                labels[task.name] = label
-
-            # Only add if we have valid labels for all tasks
-            if len(labels) == len(self.config.tasks):
-                items.append(ImageItem(image_path=str(image_path), labels=labels))
-
-        return items
-
-    def _load_from_directory(self, image_root: Path) -> List[ImageItem]:
-        """Load images and labels from directory structure."""
-        if not self.config.directory:
-            raise ValueError("Directory configuration is missing")
-
-        items: List[ImageItem] = []
-
-        # Walk through the directory structure
-        for root, _, files in os.walk(image_root):
-            for file in files:
-                if not file.lower().endswith((".png", ".jpg", ".jpeg")):
-                    continue
-
-                image_path = Path(root) / file
-                path_parts = str(image_path.relative_to(image_root)).split(os.sep)
-
-                # Extract labels based on directory configuration
-                labels: Dict[str, str] = {}
-                for task in self.config.tasks:
-                    pos = self.config.directory.task_positions.get(task.name)
-                    if pos is None or pos >= len(path_parts):
-                        continue
-
-                    label = path_parts[pos]
-                    if label not in task.classes:
-                        continue
-
-                    labels[task.name] = label
-
-                # Only add if we have valid labels for all tasks
-                if len(labels) == len(self.config.tasks):
-                    items.append(ImageItem(image_path=str(image_path), labels=labels))
+        logger.info(f"Loaded {len(items)} images for {len(self.config.tasks)} tasks")
 
         return items
 
@@ -158,9 +133,9 @@ class DatasetBuilder:
         validation_ratio: float = 0.15,
         test_ratio: float = 0.15,
         random_state: int = 42,
-    ) -> Dataset:
+    ) -> Dict[str, Dataset]:
         """
-        Build the dataset with train, validation, and test splits.
+        Build separate datasets for each task with train, validation, and test splits.
 
         Args:
             image_root: Path to the root directory containing images
@@ -170,49 +145,76 @@ class DatasetBuilder:
             random_state: Random seed for reproducibility
 
         Returns:
-            A Dataset object with train, validation, and test splits
+            A dictionary mapping task names to Dataset objects
         """
+        logger.info("Starting to build datasets.")
+
         # Validate split ratios
         if abs(train_ratio + validation_ratio + test_ratio - 1.0) > 1e-10:
+            logger.error("Split ratios must sum to 1.0")
             raise ValueError("Split ratios must sum to 1.0")
 
         image_root = Path(image_root)
 
-        # Load images and labels based on configuration
+        # Load all images and labels based on configuration
         if self.config.label_source == LabelSourceType.METADATA_FILE:
-            items = self._load_from_metadata(image_root)
+            all_items = self._load_from_metadata(image_root)
         else:  # DIRECTORY_STRUCTURE
-            items = self._load_from_directory(image_root)
+            assert self.config.directory
+            all_items = self._load_from_directory(self.config.directory, image_root)
 
-        if not items:
-            raise ValueError("No valid images found")
+        if not all_items:
+            raise ValueError(f"No valid images found in {image_root}")
 
-        # Split the dataset
-        train_items, test_items = self._split_dataset(
-            items,
-            test_size=test_ratio / (train_ratio + validation_ratio + test_ratio),
-            random_state=random_state,
-        )
+        # Create a dataset for each task
+        datasets = {}
+        for task in self.config.tasks:
+            task_name = task.name
 
-        # Further split train into train and validation
-        train_items, val_items = self._split_dataset(
-            train_items,
-            test_size=validation_ratio / (train_ratio + validation_ratio),
-            random_state=random_state,
-        )
+            # TODO: process using a reducer so we don't need to filter multiple times
 
-        # Create dataset object
-        dataset = Dataset(
-            train=DatasetSplit(items=train_items),
-            validation=DatasetSplit(items=val_items),
-            test=DatasetSplit(items=test_items),
-            label_mappings=self.label_mappings,
-        )
+            task_items = [item for item in all_items if item.task_name == task_name]
+            logger.info(f"Filtered {len(task_items)} items for task {task_name}")
+            if not task_items:
+                continue  # Skip tasks with no valid items
 
-        return dataset
+            # Split the dataset for this task
+            train_items, test_items = self._split_dataset(
+                task_items,
+                test_size=test_ratio / (train_ratio + validation_ratio + test_ratio),
+                random_state=random_state,
+                stratify_by=task_name if self.config.stratify_by == task_name else None,
+            )
+
+            # Further split train into train and validation
+            train_items, val_items = self._split_dataset(
+                train_items,
+                test_size=validation_ratio / (train_ratio + validation_ratio),
+                random_state=random_state,
+                stratify_by=task_name if self.config.stratify_by == task_name else None,
+            )
+
+            # Create dataset object for this task
+            datasets[task_name] = Dataset(
+                task_name=task_name,
+                train=DatasetSplit(items=train_items),
+                validation=DatasetSplit(items=val_items),
+                test=DatasetSplit(items=test_items),
+                label_mapping=self.label_mappings[task_name],
+            )
+
+        if not datasets:
+            raise ValueError("No valid datasets could be created for any task")
+
+        logger.info("Datasets built successfully.")
+        return datasets
 
     def _split_dataset(
-        self, items: List[ImageItem], test_size: float, random_state: int
+        self,
+        items: List[ImageItem],
+        test_size: float,
+        random_state: int,
+        stratify_by: Optional[str] = None,
     ) -> Tuple[List[ImageItem], List[ImageItem]]:
         """
         Split the dataset into two parts.
@@ -221,17 +223,17 @@ class DatasetBuilder:
             items: List of ImageItem objects
             test_size: Ratio of the second split
             random_state: Random seed for reproducibility
+            stratify_by: Task name to stratify by (overrides config.stratify_by)
 
         Returns:
             Tuple of (first_split, second_split)
         """
-        # If stratify_by is specified, use it for stratified splitting
-        if self.config.stratify_by:
-            stratify_labels = [
-                item.labels.get(self.config.stratify_by) for item in items
-            ]
+        # Determine which task to stratify by
+        stratify_task = stratify_by or self.config.stratify_by
 
-            stratify_labels = assert_list(stratify_labels)
+        # If stratify_by is specified, use it for stratified splitting
+        if stratify_task:
+            stratify_labels = [item.label for item in items]
 
             # Split the dataset
             idx_train, idx_test = train_test_split(
@@ -252,28 +254,49 @@ class DatasetBuilder:
 
         return first_split, second_split
 
-    def save(self, dataset: Dataset, output_dir: Union[str, Path]) -> None:
+    def save(self, datasets: Dict[str, Dataset], output_dir: Union[str, Path]) -> None:
         """
-        Save the dataset splits and label mappings to disk.
+        Save multiple task-specific datasets to disk.
 
         Args:
-            dataset: The dataset to save
-            output_dir: Directory to save the dataset to
+            datasets: Dictionary mapping task names to Dataset objects
+            output_dir: Directory to save the datasets to
         """
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save each split
-        for split_name in ["train", "validation", "test"]:
-            split_data = getattr(dataset, split_name)
-            split_path = output_dir / f"{split_name}.json"
+        # Save a summary of all tasks
+        tasks_summary = {
+            task_name: {
+                "train_size": len(dataset.train.items),
+                "validation_size": len(dataset.validation.items),
+                "test_size": len(dataset.test.items),
+                "classes": list(dataset.label_mapping.keys()),
+            }
+            for task_name, dataset in datasets.items()
+        }
 
-            with open(split_path, "w") as f:
-                json.dump(
-                    {"items": [item.dict() for item in split_data.items]}, f, indent=2
-                )
+        with open(output_dir / "tasks_summary.json", "w") as f:
+            json.dump(tasks_summary, f, indent=2)
 
-        # Save label mappings
-        mappings_path = output_dir / "label_mappings.json"
-        with open(mappings_path, "w") as f:
-            json.dump(dataset.label_mappings, f, indent=2)
+        # Save each task's dataset in its own directory
+        for task_name, dataset in datasets.items():
+            task_dir = output_dir / task_name
+            task_dir.mkdir(parents=True, exist_ok=True)
+
+            # Save each split
+            for split_name in ["train", "validation", "test"]:
+                split_data = getattr(dataset, split_name)
+                split_path = task_dir / f"{split_name}.json"
+
+                with open(split_path, "w") as f:
+                    json.dump(
+                        {"items": [item.dict() for item in split_data.items]},
+                        f,
+                        indent=2,
+                    )
+
+            # Save label mapping
+            mapping_path = task_dir / "label_mapping.json"
+            with open(mapping_path, "w") as f:
+                json.dump(dataset.label_mapping, f, indent=2)
