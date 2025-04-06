@@ -5,6 +5,7 @@
 # 3. Extract the features
 # 4. Save the a new dataset file with an additional key "features"
 
+import logging
 from typing import Any
 import numpy as np
 import torch
@@ -13,7 +14,7 @@ from PIL import Image
 
 from image_classifier_pipeline.lib import setup_logger
 
-logger = setup_logger(__name__)
+logger = setup_logger(__name__, level=logging.INFO)
 
 
 class EvalPrediction:
@@ -33,24 +34,28 @@ class DinoFeatureExtractor:
     def _normalise_image(self, image: Image.Image):
         """
         Normalises the as expected by the DINO model.
+
+        Remarks:
+        AutoImageProcessor already handles normalisation, so we don't need to do anything here.
         """
-        pass
+        return self.processor(
+            images=image, return_tensors="pt", padding=True, do_resize=True
+        )
 
     def extract_features(self, image: Image.Image) -> torch.Tensor:
         """
         Takes an image and returns the features extracted by the DINO model.
         """
-        inputs = self.processor(
-            images=image, return_tensors="pt", padding=True, do_resize=True
-        )
+        inputs = self._normalise_image(image)
         outputs = self.model(**inputs)
         features: torch.Tensor = outputs.last_hidden_state
-        single_feature: torch.Tensor = features.mean(dim=1)
+        logger.debug(f"Features shape: {features.shape}")
 
-        # Assert is a tensor
-        assert isinstance(single_feature, torch.Tensor)
+        averaged_features: torch.Tensor = features.mean(dim=1)
+        logger.debug(f"Averaged feature shape: {averaged_features.shape}")
 
-        return single_feature
+        assert isinstance(averaged_features, torch.Tensor)
+        return averaged_features
 
     def save_features(self, output_dir: str):
         pass
