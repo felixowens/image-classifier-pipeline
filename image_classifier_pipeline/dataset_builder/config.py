@@ -1,7 +1,7 @@
 from enum import Enum
 from pathlib import Path
 import re
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional, Any
 
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
@@ -11,6 +11,7 @@ class LabelSourceType(str, Enum):
 
     METADATA_FILE = "metadata_file"
     DIRECTORY_STRUCTURE = "directory_structure"
+    FILENAME_PATTERN = "filename_pattern"
 
 
 class TaskType(str, Enum):
@@ -147,6 +148,161 @@ class DirectoryConfig(BaseModel):
         }
 
 
+class ValueMapping(BaseModel):
+    """Configuration for mapping values to classes."""
+
+    type: Literal["range", "exact", "regex"] = Field(
+        "range", description="Type of mapping to apply"
+    )
+
+    # For range mapping (e.g., age ranges)
+    ranges: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="List of range definitions, each with 'min', 'max', and 'label'",
+    )
+
+    # For exact value mapping (e.g., gender codes)
+    values: Optional[Dict[str, str]] = Field(
+        None, description="Mapping from exact values to labels"
+    )
+
+    # For regex-based mapping
+    patterns: Optional[Dict[str, str]] = Field(
+        None, description="Mapping from regex patterns to labels"
+    )
+
+    @field_validator("ranges")
+    @classmethod
+    def validate_ranges(
+        cls, v: Optional[List[Dict[str, Any]]], info: ValidationInfo
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Validate that ranges are properly defined."""
+        if v is None:
+            return v
+
+        if info.data.get("type") != "range":
+            raise ValueError("ranges should only be provided when type is 'range'")
+
+        for i, range_def in enumerate(v):
+            if "min" not in range_def and "max" not in range_def:
+                raise ValueError(
+                    f"Range definition at index {i} must have at least one of 'min' or 'max'"
+                )
+            if "label" not in range_def:
+                raise ValueError(f"Range definition at index {i} must have a 'label'")
+
+        return v
+
+    @field_validator("values")
+    @classmethod
+    def validate_values(
+        cls, v: Optional[Dict[str, str]], info: ValidationInfo
+    ) -> Optional[Dict[str, str]]:
+        """Validate that values mapping is provided when type is 'exact'."""
+        if v is None and info.data.get("type") == "exact":
+            raise ValueError("values must be provided when type is 'exact'")
+        return v
+
+    @field_validator("patterns")
+    @classmethod
+    def validate_patterns(
+        cls, v: Optional[Dict[str, str]], info: ValidationInfo
+    ) -> Optional[Dict[str, str]]:
+        """Validate that patterns mapping is provided when type is 'regex'."""
+        if v is None and info.data.get("type") == "regex":
+            raise ValueError("patterns must be provided when type is 'regex'")
+        return v
+
+    def map_value(self, value: str) -> str:
+        """Map a value to a label based on the mapping configuration."""
+        if self.type == "range":
+            try:
+                # Convert to float for range comparison
+                num_value = float(value)
+                for range_def in self.ranges or []:
+                    min_val = range_def.get("min", float("-inf"))
+                    max_val = range_def.get("max", float("inf"))
+                    if min_val <= num_value <= max_val:
+                        return range_def["label"]
+                # If no range matches, return the original value
+                return value
+            except ValueError:
+                # If value can't be converted to float, return as is
+                return value
+        elif self.type == "exact":
+            # Direct mapping from value to label
+            return self.values.get(value, value) if self.values else value
+        elif self.type == "regex":
+            # Match against regex patterns
+            if self.patterns:
+                for pattern, label in self.patterns.items():
+                    if re.match(pattern, value):
+                        return label
+            return value
+        else:
+            return value
+
+
+class FilenameConfig(BaseModel):
+    """Configuration for filename-based label extraction."""
+
+    pattern: str = Field(
+        ...,
+        description="Regex pattern for extracting fields from filenames. Use named capture groups.",
+        examples=[r"(?P<age>\d+)_(?P<gender>[mf])_(?P<race>\w+)_(?P<datetime>.+)\.jpg"],
+    )
+
+    task_mappings: Dict[str, str] = Field(
+        ...,
+        description="Mapping from task names to filename fields",
+        examples=[{"age_category": "age", "gender": "gender"}],
+    )
+
+    value_mappings: Dict[str, ValueMapping] = Field(
+        default_factory=dict,
+        description="Optional mappings to transform extracted values to labels",
+    )
+
+    @field_validator("pattern")
+    @classmethod
+    def validate_pattern(cls, v: str, info: ValidationInfo) -> str:
+        """Validate that pattern is a valid regex with named capture groups."""
+        try:
+            regex = re.compile(v)
+            if not regex.groupindex:
+                raise ValueError(
+                    "pattern must contain at least one named capture group"
+                )
+        except re.error as e:
+            raise ValueError(f"Invalid regex pattern: {e}")
+        return v
+
+    @field_validator("task_mappings")
+    @classmethod
+    def validate_task_mappings(
+        cls, v: Dict[str, str], info: ValidationInfo
+    ) -> Dict[str, str]:
+        """Validate that task_mappings references valid capture groups in the pattern."""
+        if not v:
+            raise ValueError("task_mappings must not be empty")
+
+        try:
+            pattern = info.data.get("pattern", "")
+            regex = re.compile(pattern)
+            capture_groups = set(regex.groupindex.keys())
+
+            for task, field in v.items():
+                if field not in capture_groups:
+                    raise ValueError(
+                        f"Field '{field}' for task '{task}' not found in pattern capture groups"
+                    )
+        except re.error:
+            # Skip this validation if the pattern is invalid (it will be caught by the pattern validator)
+            pass
+
+        return v
+
+
 class DatasetConfig(BaseModel):
     """Main configuration for dataset construction."""
 
@@ -160,6 +316,9 @@ class DatasetConfig(BaseModel):
     directory: Optional[DirectoryConfig] = Field(
         None, description="Configuration for directory-based label extraction"
     )
+    filename: Optional[FilenameConfig] = Field(
+        None, description="Configuration for filename-based label extraction"
+    )
     stratify_by: Optional[str] = Field(
         None, description="Task name to stratify by when splitting the dataset"
     )
@@ -167,6 +326,10 @@ class DatasetConfig(BaseModel):
     split_mapping: DatasetSplit = Field(
         default=DatasetSplit(train=0.8, validation=0, test=0.2),
         description="Mapping of dataset splits.",
+    )
+
+    limit: Optional[int] = Field(
+        None, description="Limit the number of files to process"
     )
 
     @field_validator("metadata")
@@ -193,6 +356,21 @@ class DatasetConfig(BaseModel):
         ):
             raise ValueError(
                 "directory must be provided when label_source is 'directory_structure'"
+            )
+        return v
+
+    @field_validator("filename")
+    @classmethod
+    def validate_filename_config(
+        cls, v: Optional[FilenameConfig], info: ValidationInfo
+    ) -> Optional[FilenameConfig]:
+        """Validate that filename config is provided when label_source is FILENAME_PATTERN."""
+        if (
+            info.data.get("label_source") == LabelSourceType.FILENAME_PATTERN
+            and v is None
+        ):
+            raise ValueError(
+                "filename must be provided when label_source is 'filename_pattern'"
             )
         return v
 

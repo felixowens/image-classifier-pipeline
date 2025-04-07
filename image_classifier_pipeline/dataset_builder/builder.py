@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from typing import Dict, List, Tuple, Union, Optional
+import re
 
 from sklearn.model_selection import train_test_split
 from PIL import Image
@@ -14,7 +15,13 @@ from image_classifier_pipeline.lib import (
 )
 from tqdm import tqdm
 
-from .config import DatasetConfig, DirectoryConfig, LabelSourceType, TaskType
+from .config import (
+    DatasetConfig,
+    DirectoryConfig,
+    LabelSourceType,
+    TaskType,
+    FilenameConfig,
+)
 
 logger = setup_logger(__name__)
 
@@ -49,11 +56,12 @@ class DatasetBuilder:
         raise NotImplementedError("Metadata loading not implemented")
 
     def _load_from_directory(
-        self, directory: DirectoryConfig, image_root: Path
+        self, directory: DirectoryConfig, image_root: Path, limit: Optional[int] = None
     ) -> List[ImageItem]:
         """Load images and labels from directory structure."""
 
         items: List[ImageItem] = []
+        count = 0  # Initialize a counter
 
         for task in self.config.tasks:
             logger.debug(
@@ -89,6 +97,11 @@ class DatasetBuilder:
                 for image_path in tqdm(
                     image_files, desc=f"Processing images for {task.name}"
                 ):
+                    if limit is not None and count >= limit:  # Check against limit
+                        logger.info(
+                            f"Reached limit of {limit} images for task {task.name}"
+                        )
+                        break
                     image = Image.open(image_path)
                     features = self.feature_extractor.extract_features(image)
                     logger.debug(f"Extracted features: {features.shape}")
@@ -104,9 +117,110 @@ class DatasetBuilder:
                             features=features_list,
                         )
                     )
+                    count += 1  # Increment the counter
 
         logger.info(f"Loaded {len(items)} images for {len(self.config.tasks)} tasks")
 
+        return items
+
+    def _load_from_filename_pattern(
+        self,
+        filename_config: FilenameConfig,
+        image_root: Path,
+        limit: Optional[int] = None,
+    ) -> List[ImageItem]:
+        """Load images and labels from filename patterns."""
+
+        items: List[ImageItem] = []
+        pattern = re.compile(filename_config.pattern)
+
+        # Collect all image files
+        image_files: List[Path] = []
+        for format in ImageFormat:
+            image_files.extend(
+                image_root.glob(f"**/{format.value}", case_sensitive=False)
+            )
+
+        if len(image_files) == 0:
+            raise ValueError(f"No images found in {image_root}")
+
+        # Filter image files based on limit
+        if limit is not None:
+            logger.info(f"Limiting to {limit} images from {len(image_files)}")
+            image_files = image_files[:limit]
+
+        logger.info(f"Found {len(image_files)} images to process")
+
+        # Process each image file
+        for image_path in tqdm(image_files, desc="Processing images"):
+            # Extract filename without directory
+            filename = image_path.name
+
+            # Match pattern against filename
+            match = pattern.match(filename)
+            if not match:
+                logger.warning(
+                    f"Filename {filename} does not match pattern {filename_config.pattern}, skipping"
+                )
+                continue
+
+            # Extract fields from filename
+            extracted_fields = match.groupdict()
+
+            # Process each task
+            for task in self.config.tasks:
+                task_name = task.name
+
+                # Skip if this task is not mapped in the filename config
+                if task_name not in filename_config.task_mappings:
+                    continue
+
+                # Get the field name for this task
+                field_name = filename_config.task_mappings[task_name]
+
+                # Get the raw value from the extracted fields
+                raw_value = extracted_fields.get(field_name)
+                if raw_value is None:
+                    logger.warning(
+                        f"Field {field_name} not found in extracted fields for {filename}"
+                    )
+                    continue
+
+                # Apply value mapping if configured
+                if field_name in filename_config.value_mappings:
+                    label = filename_config.value_mappings[field_name].map_value(
+                        raw_value
+                    )
+                else:
+                    label = raw_value
+
+                # Skip if the label is not in the configured classes
+                if label not in self.label_mappings[task_name]:
+                    logger.warning(
+                        f"Label '{label}' for task '{task_name}' not in configured classes, skipping"
+                    )
+                    continue
+
+                # Process the image and extract features
+                try:
+                    image = Image.open(image_path)
+                    features = self.feature_extractor.extract_features(image)
+                    features_list: List[float] = features.flatten().tolist()
+
+                    items.append(
+                        ImageItem(
+                            image_path=str(image_path),
+                            label=label,
+                            task_name=task_name,
+                            label_id=self.label_mappings[task_name][label],
+                            features=features_list,
+                        )
+                    )
+                except Exception as e:
+                    logger.error(f"Error processing image {image_path}: {e}")
+                    continue
+
+        logger.info(f"Loaded {len(items)} items from filename patterns")
         return items
 
     def build(
@@ -131,6 +245,11 @@ class DatasetBuilder:
         # Load all images and labels based on configuration
         if self.config.label_source == LabelSourceType.METADATA_FILE:
             all_items = self._load_from_metadata(image_root)
+        elif self.config.label_source == LabelSourceType.FILENAME_PATTERN:
+            assert self.config.filename
+            all_items = self._load_from_filename_pattern(
+                self.config.filename, image_root
+            )
         else:  # DIRECTORY_STRUCTURE
             assert self.config.directory
             all_items = self._load_from_directory(self.config.directory, image_root)
