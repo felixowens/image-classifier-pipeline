@@ -15,15 +15,18 @@ import matplotlib.pyplot as plt
 from image_classifier_pipeline.classifier_trainer.config import (
     TrainingConfig,
     ClassBalanceStrategy,
+    LossType,
 )
 from image_classifier_pipeline.classifier_trainer.dataset import FeatureDataset
 from image_classifier_pipeline.classifier_trainer.model import SimpleClassifierHead
 from image_classifier_pipeline.lib.models import Dataset, DatasetSplit
 from image_classifier_pipeline.lib.logger import setup_logger
+from image_classifier_pipeline.classifier_trainer.loss import CoralLoss, CORALModel
 
 logger = setup_logger(__name__)
 
 criterion_standard = torch.nn.CrossEntropyLoss()
+criterion_coral = CoralLoss()
 
 
 class Trainer:
@@ -197,14 +200,17 @@ class Trainer:
         )
         self.model.to(self.device)
 
-        # --- Loss Function (Choose one) ---
-        # self.criterion = criterion_ordinal # Use this if you have a proper ordinal loss
-        self.criterion = criterion_standard
+        # --- Loss Function ---
+        if self.config.loss_type == LossType.CORAL:
+            self.criterion = criterion_coral
+            # Wrap the model with CORAL-specific model
+            self.model = CORALModel(self.model, self.num_classes)
+            logger.info("Using CORAL loss for ordinal regression.")
+        else:  # Default to standard CrossEntropyLoss
+            self.criterion = criterion_standard
+            logger.info("Using standard CrossEntropyLoss.")
+
         self.criterion.to(self.device)
-        # Indicate if using standard loss for ordinal-like task
-        logger.warning(
-            "Using standard CrossEntropyLoss. Consider an Ordinal Loss (e.g., CORAL) for better results if classes are ordered."
-        )
 
         # --- Optimizer ---
         self.optimizer = torch.optim.AdamW(
@@ -329,7 +335,15 @@ class Trainer:
         """Calculates loss, accuracy, and MAE (for ordinal interpretation)."""
         loss = self.criterion(logits, labels).item()
 
-        preds = torch.argmax(logits, dim=1)
+        # Handle predictions differently based on loss type
+        if self.config.loss_type == LossType.CORAL:
+            # For CORAL, count positive outputs to get the predicted rank
+            probas = torch.sigmoid(logits)
+            preds = torch.sum(probas > 0.5, dim=1)
+        else:
+            # Standard classification - take argmax
+            preds = torch.argmax(logits, dim=1)
+
         accuracy = (preds == labels).float().mean().item()
 
         # Mean Absolute Error (MAE) on class indices - useful for ordinal tasks
@@ -530,7 +544,13 @@ class Trainer:
                 features, labels = features.to(self.device), labels.to(self.device)
                 logits = self.model(features)
 
-                preds = torch.argmax(logits, dim=1)
+                # Handle predictions based on loss type
+                if self.config.loss_type == LossType.CORAL:
+                    probas = torch.sigmoid(logits)
+                    preds = torch.sum(probas > 0.5, dim=1)
+                else:
+                    preds = torch.argmax(logits, dim=1)
+
                 all_preds.extend(preds.cpu().numpy())
                 all_labels.extend(labels.cpu().numpy())
                 all_logits.extend(logits.cpu().numpy())  # Optional

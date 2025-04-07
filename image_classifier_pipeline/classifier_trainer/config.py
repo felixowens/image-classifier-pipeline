@@ -9,6 +9,13 @@ class Task(str, Enum):
     IMAGE_CLASSIFICATION = "image_classification"
 
 
+class LossType(str, Enum):
+    """Type of loss function to use for training."""
+
+    CROSS_ENTROPY = "cross_entropy"  # Standard classification loss
+    CORAL = "coral"  # Consistent Rank Logits for ordinal regression
+
+
 class ClassBalanceStrategy(str, Enum):
     """Strategy for handling class imbalance."""
 
@@ -66,4 +73,8 @@ class TrainingConfig(BaseModel):
     seed: int = Field(..., description="Random seed for reproducibility")
     class_balance_strategy: ClassBalanceStrategy = Field(
         ClassBalanceStrategy.NONE, description="Strategy for handling class imbalance"
+    )
+    loss_type: LossType = Field(
+        LossType.CROSS_ENTROPY,
+        description="Type of loss function to use (cross_entropy for standard classification, coral for ordinal regression)",
     )
