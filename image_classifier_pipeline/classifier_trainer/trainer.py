@@ -12,7 +12,10 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-from image_classifier_pipeline.classifier_trainer.config import TrainingConfig
+from image_classifier_pipeline.classifier_trainer.config import (
+    TrainingConfig,
+    ClassBalanceStrategy,
+)
 from image_classifier_pipeline.classifier_trainer.dataset import FeatureDataset
 from image_classifier_pipeline.classifier_trainer.model import SimpleClassifierHead
 from image_classifier_pipeline.lib.models import Dataset, DatasetSplit
@@ -72,7 +75,7 @@ class Trainer:
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(config.seed)
 
-            # --- Aim Tracking ---
+        # --- Aim Tracking ---
         self.aim_run = aim.Run(
             experiment=f"{config.model_information.name}_v{config.model_information.version}"
         )
@@ -85,12 +88,62 @@ class Trainer:
             f"Aim run initialized. Check UI or logs at: {self.aim_run.repo.path}"
         )
 
-        # --- Datasets and Dataloaders ---
-        self.train_dataset = FeatureDataset(dataset.train)
-        self.val_dataset = FeatureDataset(dataset.validation)
-        self.test_dataset = FeatureDataset(dataset.test) if dataset.test else None
+        # Apply class balancing strategy if configured
+        if self.config.class_balance_strategy == ClassBalanceStrategy.TRUNCATE:
+            logger.info("Applying class balancing by truncation...")
 
-        self.train_distribution = self._get_dataset_split_distribution(dataset.train)
+            # Get original distribution for logging
+            original_train_distribution = self._get_dataset_split_distribution(
+                dataset.train
+            )
+
+            # Balance the training set
+            balanced_train_split = self._balance_dataset_by_truncation(dataset.train)
+
+            # Balance the validation set
+            balanced_validation_split = self._balance_dataset_by_truncation(
+                dataset.validation
+            )
+
+            # Balance the test set
+            if dataset.test:
+                balanced_test_split = self._balance_dataset_by_truncation(dataset.test)
+            else:
+                balanced_test_split = None
+
+            # Create a new dataset with the balanced training split
+            self.dataset = Dataset(
+                task_name=dataset.task_name,
+                train=balanced_train_split,
+                validation=balanced_validation_split,
+                test=balanced_test_split,
+                label_mapping=dataset.label_mapping,
+            )
+
+            # Log the changes
+            balanced_train_distribution = self._get_dataset_split_distribution(
+                self.dataset.train
+            )
+            logger.info(
+                f"Original training distribution: {original_train_distribution}"
+            )
+            logger.info(
+                f"Balanced training distribution: {balanced_train_distribution}"
+            )
+            logger.info(
+                f"Training set size reduced from {len(dataset.train.items)} to {len(self.dataset.train.items)} items"
+            )
+
+        # --- Datasets and Dataloaders ---
+        self.train_dataset = FeatureDataset(self.dataset.train)
+        self.val_dataset = FeatureDataset(self.dataset.validation)
+        self.test_dataset = (
+            FeatureDataset(self.dataset.test) if self.dataset.test else None
+        )
+
+        self.train_distribution = self._get_dataset_split_distribution(
+            self.dataset.train
+        )
         self.aim_run["train_distribution"] = self.train_distribution
 
         # Ensure consistent feature dims and num_classes detection
@@ -224,6 +277,51 @@ class Trainer:
                     logger.warning(f"Add {count} samples to class '{label}'.")
 
         return distribution
+
+    def _balance_dataset_by_truncation(
+        self, dataset_split: DatasetSplit
+    ) -> DatasetSplit:
+        """
+        Balance the dataset by truncating larger classes to match the smallest class size.
+
+        Args:
+            dataset_split: The dataset split to balance
+
+        Returns:
+            A new balanced DatasetSplit
+        """
+        # Group items by label
+        items_by_label = {}
+        for item in dataset_split.items:
+            if item.label not in items_by_label:
+                items_by_label[item.label] = []
+            items_by_label[item.label].append(item)
+
+        # Find the size of the smallest class
+        min_class_size = min(len(items) for items in items_by_label.values())
+
+        # Truncate each class to the minimum size
+        balanced_items = []
+        for label, items in items_by_label.items():
+            # Use the same seed for reproducibility, but derive a unique seed for each class
+            class_seed = self.config.seed + sum(ord(c) for c in label)
+            np.random.seed(class_seed)
+
+            # Randomly select min_class_size items from this class
+            if len(items) > min_class_size:
+                logger.info(
+                    f"Truncating class '{label}' from {len(items)} to {min_class_size} items"
+                )
+                selected_items = np.random.choice(
+                    items, min_class_size, replace=False
+                ).tolist()
+            else:
+                selected_items = items
+
+            balanced_items.extend(selected_items)  # type: ignore
+
+        # Create a new DatasetSplit with the balanced items
+        return DatasetSplit(items=balanced_items)
 
     def _calculate_metrics(
         self, logits: torch.Tensor, labels: torch.Tensor

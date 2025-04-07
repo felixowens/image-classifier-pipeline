@@ -9,6 +9,13 @@ class Task(str, Enum):
     IMAGE_CLASSIFICATION = "image_classification"
 
 
+class ClassBalanceStrategy(str, Enum):
+    """Strategy for handling class imbalance."""
+
+    NONE = "none"  # Use the original dataset as is
+    TRUNCATE = "truncate"  # Truncate larger classes to match the smallest class
+
+
 DEFAULT_LEARNING_RATE = 0.0001
 DEFAULT_BATCH_SIZE = 128
 DEFAULT_NUM_EPOCHS = 10
@@ -57,3 +64,6 @@ class TrainingConfig(BaseModel):
         ..., description="Hyperparameters for the training process"
     )
     seed: int = Field(..., description="Random seed for reproducibility")
+    class_balance_strategy: ClassBalanceStrategy = Field(
+        ClassBalanceStrategy.NONE, description="Strategy for handling class imbalance"
+    )

@@ -387,3 +387,6 @@ class DatasetConfig(BaseModel):
                     f"stratify_by task '{v}' not found in configured tasks"
                 )
         return v
+
+
+# TODO: add metadata fields for information like dataset source, date, etc.

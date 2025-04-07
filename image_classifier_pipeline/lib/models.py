@@ -39,8 +39,8 @@ class Dataset(BaseModel):
 
     task_name: str
     train: DatasetSplit
-    test: DatasetSplit
-    validation: Optional[DatasetSplit]
+    validation: DatasetSplit
+    test: Optional[DatasetSplit]
 
     # Store label mapping for this task
     # For categorical tasks: {class_name: index}
@@ -84,29 +84,31 @@ class Dataset(BaseModel):
 
         train_dataset = DatasetSplit(items=train_items)
 
-        test_items: List[ImageItem] = []
-        with open(os.path.join(folder_path, "test.jsonl"), "r") as f:
+        validation_items: List[ImageItem] = []
+        with open(os.path.join(folder_path, "validation.jsonl"), "r") as f:
             for line in f:
                 item_json = json.loads(line)
                 image_item = ImageItem.model_validate(item_json)
-                test_items.append(image_item)
-        test_dataset = DatasetSplit(items=test_items)
-        logger.info(f"Test items loaded from {os.path.join(folder_path, 'test.jsonl')}")
+                validation_items.append(image_item)
+        validation_dataset = DatasetSplit(items=validation_items)
+        logger.info(
+            f"Validation items loaded from {os.path.join(folder_path, 'validation.jsonl')}"
+        )
 
-        validation_items: List[ImageItem] = []
-        if os.path.exists(os.path.join(folder_path, "validation.jsonl")):
-            with open(os.path.join(folder_path, "validation.jsonl"), "r") as f:
+        test_items: List[ImageItem] = []
+        if os.path.exists(os.path.join(folder_path, "test.jsonl")):
+            with open(os.path.join(folder_path, "test.jsonl"), "r") as f:
                 for line in f:
                     item_json = json.loads(line)
                     image_item = ImageItem.model_validate(item_json)
-                    validation_items.append(image_item)
+                    test_items.append(image_item)
 
             logger.info(
-                f"Validation items loaded from {os.path.join(folder_path, 'validation.jsonl')}"
+                f"Test items loaded from {os.path.join(folder_path, 'test.jsonl')}"
             )
-            validation_dataset = DatasetSplit(items=validation_items)
+            test_dataset = DatasetSplit(items=test_items)
         else:
-            validation_dataset = None
+            test_dataset = None
 
         # Create the dataset object
         return cls(
