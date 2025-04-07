@@ -499,8 +499,6 @@ class Trainer:
         )
         # Save the final model as well
         self.save("final_model.pth")
-        # Close the Aim run
-        self.aim_run.close()
 
     def evaluate(self, model_path: Optional[str] = None) -> Dict[str, Any]:
         """Evaluates the model on the test set."""
@@ -583,16 +581,12 @@ class Trainer:
         cm = confusion_matrix(all_labels, all_preds)
         cm_df = pd.DataFrame(cm, index=self.label_names, columns=self.label_names)
 
-        # Log to Aim
-        eval_aim_run = aim.Run(
-            experiment=f"{self.config.model_information.name}_v{self.config.model_information.version}_EVAL"
+        # Log to the same Aim run with test context
+        self.aim_run.track(test_loss, name="epoch_loss", context={"subset": "test"})
+        self.aim_run.track(
+            test_accuracy, name="epoch_accuracy", context={"subset": "test"}
         )
-        eval_aim_run["hparams"] = self.config.model_dump_json()
-        eval_aim_run.track(test_loss, name="test_loss")
-        eval_aim_run.track(test_accuracy, name="test_accuracy")
-        eval_aim_run.track(test_mae, name="test_mae")
-
-        # Track report?
+        self.aim_run.track(test_mae, name="epoch_mae", context={"subset": "test"})
 
         # Create confusion matrix figure
         try:
@@ -605,12 +599,12 @@ class Trainer:
             plt.savefig(cm_path)
             plt.close()
             # Log image to Aim
-            eval_aim_run.track(aim.Image(cm_path), name="confusion_matrix")
+            self.aim_run.track(
+                aim.Image(cm_path), name="confusion_matrix", context={"subset": "test"}
+            )
             logger.info(f"Confusion matrix saved to {cm_path}")
         except Exception as e:
             logger.error(f"Could not generate or save confusion matrix plot: {e}")
-
-        eval_aim_run.close()
 
         return {
             "test_loss": test_loss,

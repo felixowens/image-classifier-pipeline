@@ -69,6 +69,7 @@ def train(
         logger.info(json.dumps(test_results, indent=4))
 
         logger.info("Evaluation completed successfully.")
+        trainer.aim_run.close()
     except Exception as e:
         logger.critical(e, exc_info=True)
 
