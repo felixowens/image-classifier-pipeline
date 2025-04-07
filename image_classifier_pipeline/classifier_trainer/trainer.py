@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 from image_classifier_pipeline.classifier_trainer.config import TrainingConfig
 from image_classifier_pipeline.classifier_trainer.dataset import FeatureDataset
 from image_classifier_pipeline.classifier_trainer.model import SimpleClassifierHead
-from image_classifier_pipeline.lib.models import Dataset
+from image_classifier_pipeline.lib.models import Dataset, DatasetSplit
 from image_classifier_pipeline.lib.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -72,10 +72,26 @@ class Trainer:
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(config.seed)
 
+            # --- Aim Tracking ---
+        self.aim_run = aim.Run(
+            experiment=f"{config.model_information.name}_v{config.model_information.version}"
+        )
+        # Sanitize config for Aim (it might not like Pydantic models directly)
+        config_json_string = config.model_dump_json()
+        config_dict = json.loads(config_json_string)
+        self.aim_run["hparams"] = config_dict
+
+        logger.info(
+            f"Aim run initialized. Check UI or logs at: {self.aim_run.repo.path}"
+        )
+
         # --- Datasets and Dataloaders ---
         self.train_dataset = FeatureDataset(dataset.train)
         self.val_dataset = FeatureDataset(dataset.validation)
         self.test_dataset = FeatureDataset(dataset.test) if dataset.test else None
+
+        self.train_distribution = self._get_dataset_split_distribution(dataset.train)
+        self.aim_run["train_distribution"] = self.train_distribution
 
         # Ensure consistent feature dims and num_classes detection
         self.feature_dim = self.train_dataset.feature_dim
@@ -144,23 +160,70 @@ class Trainer:
         # Optional: Add LR scheduler here if needed
         # self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=3)
 
-        # --- Aim Tracking ---
-        self.aim_run = aim.Run(
-            experiment=f"{config.model_information.name}_v{config.model_information.version}"
-        )
-        # Sanitize config for Aim (it might not like Pydantic models directly)
-        config_json_string = config.model_dump_json()
-        config_dict = json.loads(config_json_string)
-        self.aim_run["hparams"] = config_dict
-
-        logger.info(
-            f"Aim run initialized. Check UI or logs at: {self.aim_run.repo.path}"
-        )
-
         # --- Tracking Best Model ---
         self.best_val_metric = float("inf")  # Lower is better for loss or MAE
         # self.best_val_metric = float('-inf') # Higher is better for accuracy
         self.best_epoch = -1
+
+    def _get_dataset_split_distribution(self, split: DatasetSplit) -> Dict[str, int]:
+        """Get the distribution of classes in the dataset split."""
+
+        total_count = len(split.items)
+
+        # Count instances per class
+        distribution = {}
+        for item in split.items:
+            distribution[item.label] = distribution.get(item.label, 0) + 1
+
+        # Calculate percentage distribution
+        percentage_distribution = {}
+        for label, count in distribution.items():
+            percentage_distribution[label] = count / total_count * 100
+
+        # Calculate ideal percentage per class (evenly distributed)
+        num_classes = len(distribution)
+        ideal_percentage = 100 / num_classes if num_classes > 0 else 0
+
+        # Check for class imbalance
+        imbalanced_classes = []
+        samples_to_add = {}
+
+        for label, percentage in percentage_distribution.items():
+            # Check if the class deviates from ideal by more than 5%
+            deviation = abs(percentage - ideal_percentage)
+            if deviation > 5:
+                imbalanced_classes.append(label)
+
+                # Calculate samples needed for ideal representation
+                current_count = distribution[label]
+                ideal_count = int(total_count * (ideal_percentage / 100))
+
+                if current_count < ideal_count:
+                    samples_to_add[label] = ideal_count - current_count
+
+        # Log warnings if imbalanced classes found
+        if imbalanced_classes:
+            logger.warning(
+                f"Class imbalance detected: {len(imbalanced_classes)} out of {num_classes} classes deviate from ideal representation by >5%."
+            )
+
+            logger.warning(
+                f"Ideal class distribution would be {ideal_percentage:.1f}% per class."
+            )
+
+            for label in imbalanced_classes:
+                current_pct = percentage_distribution[label]
+                logger.warning(
+                    f"Class '{label}' has {distribution[label]} samples ({current_pct:.1f}%), "
+                    f"deviating by {abs(current_pct - ideal_percentage):.1f}% from ideal."
+                )
+
+            if samples_to_add:
+                logger.warning("Samples to add for balanced representation:")
+                for label, count in samples_to_add.items():
+                    logger.warning(f"Add {count} samples to class '{label}'.")
+
+        return distribution
 
     def _calculate_metrics(
         self, logits: torch.Tensor, labels: torch.Tensor
