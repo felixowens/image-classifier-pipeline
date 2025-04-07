@@ -6,11 +6,14 @@ import yaml
 from pydantic import ValidationError
 
 from image_classifier_pipeline.lib.models import Dataset
+from image_classifier_pipeline.lib.logger import setup_logger
 
 from .trainer import Trainer
 from .config import TrainingConfig
 
 app = typer.Typer(help="Image Classifier Training Component")
+
+logger = setup_logger(__name__)
 
 
 @app.command()
@@ -19,8 +22,9 @@ def train(
     config_file: str = typer.Argument(
         ..., help="Path to the training configuration file (YAML/JSON)"
     ),
-    output_dir: str = typer.Option("./models", help="Path to save the trained models"),
-    random_state: int = typer.Option(42, help="Random seed for reproducibility"),
+    output_dir: str = typer.Option(
+        "./tmp/output/models", help="Path to save the trained models"
+    ),
 ):
     """
     Train image classifiers using the specified dataset and configuration.
@@ -40,39 +44,34 @@ def train(
         # Parse and validate the configuration
         try:
             config = TrainingConfig.model_validate(config_data)
-            typer.echo(f"Training configuration: {config}")
         except ValidationError as e:
-            typer.echo(f"Configuration validation error: {e}")
+            logger.critical(e, exc_info=True)
             raise typer.Exit(code=1)
 
         # Load dataset
         dataset = Dataset.load_from_saved_folder(dataset_dir)
 
         # Initialize trainer and train models
-        trainer = Trainer(config, dataset)
+        trainer = Trainer(config, dataset, output_dir=output_dir)
         try:
-            results = trainer.train()
+            typer.echo("Training model...")
+            trainer.train()
         except Exception as e:
-            typer.echo(f"Error during training: {e}")
+            logger.critical(e, exc_info=True)
             raise typer.Exit(code=1)
 
-        raise NotImplementedError("Not implemented")
+        logger.info("Training completed successfully.")
 
-        # Save the trained models
-        trainer.save_models(results, output_dir)
+        logger.info("Evaluating model...")
+        test_results = trainer.evaluate()
+        logger.info("Test results:")
+        # Print test results as pretty JSON
+        logger.info(json.dumps(test_results, indent=4))
 
-        typer.echo(f"Models successfully trained and saved to {output_dir}")
-        for task_name, result in results.items():
-            typer.echo(f"\nTask: {task_name}")
-            typer.echo(
-                f"  - Validation accuracy: {result.metrics.get('val_accuracy', 'N/A'):.4f}"
-            )
-            typer.echo(
-                f"  - Test accuracy: {result.metrics.get('test_accuracy', 'N/A'):.4f}"
-            )
-
+        logger.info("Evaluation completed successfully.")
     except Exception as e:
-        typer.echo(f"Error: {e}")
+        logger.critical(e, exc_info=True)
+
         raise typer.Exit(code=1)
 
 

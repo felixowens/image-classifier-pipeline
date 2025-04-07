@@ -48,6 +48,7 @@ dmypy.json
 # Other files
 *.DS_Store
 *.swp
+.aim/
 
 # Application files
 /config

@@ -45,9 +45,6 @@ class Hyperparameters(BaseModel):
     num_epochs: int = Field(
         DEFAULT_NUM_EPOCHS, description="Number of epochs to train", ge=1
     )
-    num_workers: int = Field(
-        DEFAULT_NUM_WORKERS, description="Number of workers for training", ge=1
-    )
 
 
 class TrainingConfig(BaseModel):
