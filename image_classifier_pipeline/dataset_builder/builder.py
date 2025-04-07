@@ -56,7 +56,7 @@ class DatasetBuilder:
         items: List[ImageItem] = []
 
         for task in self.config.tasks:
-            logger.info(
+            logger.debug(
                 f"Loading images from {directory.image_dirs(image_root, task.name, task.classes)}"
             )
             image_dirs = directory.image_dirs(image_root, task.name, task.classes)

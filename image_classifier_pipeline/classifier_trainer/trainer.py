@@ -46,12 +46,15 @@ class Trainer:
 
         logger.info(f"Training output will be saved to: {self.output_dir}")
 
+        # Validate required dataset splits
+        if not dataset.validation:
+            raise ValueError("Dataset must include a validation split")
+
         logger.info(
-            f"Dataset '{dataset.task_name}' loaded with {len(dataset.train.items)} training items."
+            f"Dataset '{dataset.task_name}' loaded with {len(dataset.train.items)} training items and {len(dataset.validation.items)} validation items."
         )
-        if dataset.validation:
-            logger.info(f"{len(dataset.validation.items)} validation items.")
-        logger.info(f"{len(dataset.test.items)} test items.")
+        if dataset.test:
+            logger.info(f"Test split available with {len(dataset.test.items)} items.")
 
         logger.info(f"Label Mapping: {dataset.label_mapping}")
         self.num_classes = len(dataset.label_mapping)
@@ -71,10 +74,8 @@ class Trainer:
 
         # --- Datasets and Dataloaders ---
         self.train_dataset = FeatureDataset(dataset.train)
-        self.test_dataset = FeatureDataset(dataset.test)
-        self.val_dataset = (
-            FeatureDataset(dataset.validation) if dataset.validation else None
-        )
+        self.val_dataset = FeatureDataset(dataset.validation)
+        self.test_dataset = FeatureDataset(dataset.test) if dataset.test else None
 
         # Ensure consistent feature dims and num_classes detection
         self.feature_dim = self.train_dataset.feature_dim
@@ -82,21 +83,21 @@ class Trainer:
             self.feature_dim > 0
         ), "Could not determine feature dimension from training data."
         assert (
-            self.test_dataset.feature_dim == self.feature_dim
-        ), "Test feature dimension mismatch."
-        if self.val_dataset:
+            self.val_dataset.feature_dim == self.feature_dim
+        ), "Validation feature dimension mismatch."
+        assert (
+            self.val_dataset.num_classes == self.num_classes
+        ), "Validation class count mismatch."
+        if self.test_dataset:
             assert (
-                self.val_dataset.feature_dim == self.feature_dim
-            ), "Validation feature dimension mismatch."
+                self.test_dataset.feature_dim == self.feature_dim
+            ), "Test feature dimension mismatch."
             assert (
-                self.val_dataset.num_classes == self.num_classes
-            ), "Validation class count mismatch."
+                self.test_dataset.num_classes == self.num_classes
+            ), "Test class count mismatch."
         assert (
             self.train_dataset.num_classes == self.num_classes
         ), "Train class count mismatch."
-        assert (
-            self.test_dataset.num_classes == self.num_classes
-        ), "Test class count mismatch."
 
         logger.info(f"Detected Feature Dimension: {self.feature_dim}")
         logger.info(f"Detected Number of Classes: {self.num_classes}")
@@ -106,18 +107,18 @@ class Trainer:
             batch_size=config.hyperparameters.batch_size,
             shuffle=True,
         )
-        self.test_loader = DataLoader(
-            self.test_dataset,
+        self.val_loader = DataLoader(
+            self.val_dataset,
             batch_size=config.hyperparameters.batch_size,
             shuffle=False,
         )
-        self.val_loader = (
+        self.test_loader = (
             DataLoader(
-                self.val_dataset,
+                self.test_dataset,
                 batch_size=config.hyperparameters.batch_size,
                 shuffle=False,
             )
-            if self.val_dataset
+            if self.test_dataset
             else None
         )
 
@@ -190,7 +191,7 @@ class Trainer:
             self.model.eval()
             context = torch.no_grad()
             aim_context = {
-                "subset": "val" if self.val_loader else "test"
+                "subset": "test" if loader == self.test_loader else "val"
             }  # Label context appropriately
 
         epoch_loss = 0.0
@@ -276,46 +277,45 @@ class Trainer:
             )
 
             # --- Validation Phase ---
-            val_metrics = None
-            if self.val_loader:
-                val_metrics = self._run_epoch(self.val_loader, is_training=False)
+            val_metrics = self._run_epoch(self.val_loader, is_training=False)
+            logger.info(
+                f"Val   | Loss: {val_metrics['loss']:.4f}, Acc: {val_metrics['accuracy']:.4f}, MAE: {val_metrics['mae']:.4f}"
+            )
+            self.aim_run.track(
+                val_metrics["loss"],
+                name="epoch_loss",
+                epoch=epoch,
+                context={"subset": "val"},
+            )
+            self.aim_run.track(
+                val_metrics["accuracy"],
+                name="epoch_accuracy",
+                epoch=epoch,
+                context={"subset": "val"},
+            )
+            self.aim_run.track(
+                val_metrics["mae"],
+                name="epoch_mae",
+                epoch=epoch,
+                context={"subset": "val"},
+            )
+
+            # --- Checkpointing ---
+            # Using MAE as the metric to optimize for ordinal tasks (lower is better)
+            current_val_metric = val_metrics["mae"]
+            # Or use accuracy if that's preferred:
+            # current_val_metric = -val_metrics['accuracy'] # Negate accuracy so lower is better
+
+            if current_val_metric < self.best_val_metric:
+                self.best_val_metric = current_val_metric
+                self.best_epoch = epoch
                 logger.info(
-                    f"Val   | Loss: {val_metrics['loss']:.4f}, Acc: {val_metrics['accuracy']:.4f}, MAE: {val_metrics['mae']:.4f}"
+                    f"✨ New best validation metric ({self.best_val_metric:.4f}) at epoch {epoch+1}. Saving model..."
                 )
-                self.aim_run.track(
-                    val_metrics["loss"],
-                    name="epoch_loss",
-                    epoch=epoch,
-                    context={"subset": "val"},
-                )
-                self.aim_run.track(
-                    val_metrics["accuracy"],
-                    name="epoch_accuracy",
-                    epoch=epoch,
-                    context={"subset": "val"},
-                )
-                self.aim_run.track(
-                    val_metrics["mae"],
-                    name="epoch_mae",
-                    epoch=epoch,
-                    context={"subset": "val"},
-                )
+                self.save("best_model.pth")
 
-                # --- Checkpointing ---
-                # Using MAE as the metric to optimize for ordinal tasks (lower is better)
-                current_val_metric = val_metrics["mae"]
-                # Or use accuracy if that's preferred:
-                # current_val_metric = -val_metrics['accuracy'] # Negate accuracy so lower is better
-
-                if current_val_metric < self.best_val_metric:
-                    self.best_val_metric = current_val_metric
-                    self.best_epoch = epoch
-                    logger.info(
-                        f"✨ New best validation metric ({self.best_val_metric:.4f}) at epoch {epoch+1}. Saving model..."
-                    )
-                    self.save("best_model.pth")
             # Optional: Adjust learning rate with scheduler
-            # if self.scheduler and val_metrics:
+            # if self.scheduler:
             #    self.scheduler.step(val_metrics['loss']) # Or other metric
 
         logger.info("Training finished.")
@@ -329,6 +329,10 @@ class Trainer:
 
     def evaluate(self, model_path: Optional[str] = None) -> Dict[str, Any]:
         """Evaluates the model on the test set."""
+        if not self.test_loader:
+            logger.warning("No test set available for evaluation.")
+            return {}
+
         if model_path:
             logger.info(f"Loading model from {model_path} for evaluation.")
             try:
